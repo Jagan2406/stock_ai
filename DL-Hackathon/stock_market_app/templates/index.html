@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock AI | Fintech Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@300;400;600;800&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+
+    <!-- Real-time Ticker Bar -->
+    <div class="ticker-wrap">
+        <div class="ticker">
+            <div class="ticker-item">NIFTY 50 <span class="up">▲ 25,271</span></div>
+            <div class="ticker-item">SENSEX <span class="up">▲ 82,814</span></div>
+            <div class="ticker-item">S&P 500 <span class="down">▼ 5,346</span></div>
+            <div class="ticker-item">NASDAQ <span class="up">▲ 16,745</span></div>
+            <div class="ticker-item">USD/INR <span class="neutral">90.73</span></div>
+            <div class="ticker-item">GOLD <span class="up">▲ 1,56,960</span></div>
+            <!-- Duplicate for infinite scroll effect (optional in basic CSS) -->
+        </div>
+    </div>
+
+    <div class="container">
+        <main class="main">
+            <!-- Header -->
+            <header class="app-header topbar">
+                <div class="topbar-inner">
+                    <div class="topbar-left"></div>
+                    <div class="main-header-center">
+                        <div class="main-brand-wrapper">
+                            <h1 class="main-brand">StockAI PRO</h1>
+                        </div>
+                    </div>
+                
+                </div>
+            </header>
+
+        <!-- Search Section -->
+        <section class="search-section">
+            <div class="search-wrapper">
+                <form method="POST" action="/" class="search-form glass-panel">
+                    <span class="search-icon">🔍</span>
+                    <input id="ticker-input" type="text" name="ticker" placeholder="Search Ticker (e.g., RELIANCE.NS, TSLA)..." required
+                        value="{{ ticker|default('') }}" autocomplete="off">
+                    <button type="submit">ANALYZE</button>
+                </form>
+
+                <!-- Autocomplete dropdown (populated by JS). Placed after the form so it pushes content down. -->
+                <div id="ticker-dropdown" class="autocomplete-dropdown" aria-hidden="true"></div>
+            </div>
+            {% if error %}
+            <div class="error-msg glass-panel">{{ error }}</div>
+            {% endif %}
+
+            <div class="search-suggestions">
+                <p>Quick Access:</p>
+                <div class="ticker-tags">
+                    {% for t in ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'AAPL', 'TSLA', 'NVDA'] %}
+                    <span class="ticker-pill" onclick="analyzeStock('{{t}}')">{{ t }}</span>
+                    {% endfor %}
+                </div>
+                <div class="mt-1">
+                    <a href="/trending" class="ticker-pill trending-pill">
+                        🔥 View Top Trending Stocks
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        {% if graphJSON %}
+        <!-- AI Dashboard -->
+        <div class="dashboard-grid">
+
+            <!-- Metrics Column -->
+            <div class="metrics-col">
+                <div class="card metric-card glass-panel">
+                    <h3>Current Price (INR)</h3>
+                    <div class="value">{{ current_price }}</div>
+                    <div class="sub-value">Real-Time Data</div>
+                </div>
+
+                <div class="card metric-card glass-panel {{ 'positive' if trend == 'UP' else 'negative' }}">
+                    <h3>AI Price Target</h3>
+                    <div class="value">
+                        {{ predicted_price }}
+                        <span class="trend-icon">
+                            {% if trend == 'UP' %}▲{% else %}▼{% endif %}
+                        </span>
+                    </div>
+                    <div class="sub-value">{{ difference }} (24h Forecast)</div>
+                </div>
+
+                <div
+                    class="card metric-card glass-panel {{ 'action-buy' if recommendation == 'BUY' else 'action-sell' if recommendation == 'SELL' else 'action-hold' }}">
+                    <h3>Signal</h3>
+                    <div class="value action-text">{{ recommendation }}</div>
+                    <div class="feature-bar-label">Signal Detection</div>
+                    <div class="feature-bar-bg">
+                        <div class="feature-bar-fill" data-fill="{{ confidence_score if confidence_score else '50%' }}"></div>
+                    </div>
+                </div>
+            </div>
+
+
+
+
+
+            <!-- Insight & Context Column -->
+            <div class="insight-col">
+                <div class="card analysis-card glass-panel">
+                    <div class="card-header">
+                        <h3> AI Model Insight</h3>
+                        <span class="confidence-badge">Confidence: {{ confidence_score }}</span>
+                    </div>
+                    <p class="insight-text">{{ ai_insight }}</p>
+
+                    <!-- Compact Calculator Toggle Button -->
+                    <div class="align-right mb-1">
+                        <button id="calc-toggle-btn" class="btn-text" onclick="toggleCalculator()">🔮 Predict Future Value</button>
+                    </div>
+
+                    <div class="model-info">
+                        <span>Model: Linear Regression v1.0</span>
+                        <span>Training Data: 3 Months</span>
+                    </div>
+                </div>
+
+                <div class="card chart-card glass-panel">
+                    <div id="plotly-chart"></div>
+                </div>
+
+                <!-- Hidden Investment Calculator Panel (Moved here) -->
+                <div id="calculator-section" class="card glass-panel hidden calc-section">
+                    <h3 class="calc-title">Investment Calculator</h3>
+                    <div class="calc-row">
+                        <div class="calc-col">
+                            <label class="small-label">Amount (₹)</label>
+                            <input type="number" id="calc-amount" placeholder="50000" class="input glass-panel">
+                        </div>
+                        <div class="calc-col">
+                            <label class="small-label">Target Date</label>
+                            <input type="date" id="calc-date" class="input glass-panel">
+                        </div>
+                        <div class="align-end">
+                            <button class="btn-primary" onclick="calculateForecast()">GO</button>
+                        </div>
+                    </div>
+
+                    <!-- Compact Results -->
+                    <div id="calc-results" class="hidden calc-results">
+                        <div class="grid-3">
+                            <div>
+                                <div class="small-label">Future Value</div>
+                                <div class="value res-value" id="res-value">--</div>
+                            </div>
+                            <div>
+                                <div class="small-label">Profit / Loss</div>
+                                <div class="value res-value" id="res-pl">--</div>
+                            </div>
+                            <div>
+                                <div class="small-label">Return</div>
+                                <div class="value res-value res-percent" id="res-percent">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+
+
+        <!-- Portfolio Section -->
+        <section class="portfolio-section glass-panel">
+            <div class="section-header">
+                <h3>💼 Live Portfolio</h3>
+                <div class="portfolio-summary">
+                    <div class="p-item">
+                        <span class="label">Cash Balance</span>
+                        <span class="val">{{ cash_balance }}</span>
+                    </div>
+                    <div class="p-item">
+                        <span class="label">Net Worth</span>
+                        <span class="val highlight">{{ portfolio_value }}</span>
+                    </div>
+                </div>
+            </div>
+
+            {% if holdings %}
+            <div class="table-container">
+                <table class="fintech-table">
+                    <thead>
+                        <tr>
+                            <th>Asset</th>
+                            <th>Qty</th>
+                            <th>Avg Price</th>
+                            <th>Current Value</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in holdings %}
+                        <tr>
+                            <td class="font-mono"><strong>{{ item.ticker }}</strong></td>
+                            <td>{{ item.shares }}</td>
+                            <td>{{ item.avg_price }}</td>
+                            <td>{{ item.current_value }}</td>
+                            <td><span class="status-badge hold">HOLD</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <div class="controls">
+                <button onclick="resetPortfolio()" class="btn-text">Reset Simulator</button>
+            </div>
+        </section>
+
+        <script>
+            var graphData = {{ graphJSON | safe }};
+            var layout = graphData.layout;
+
+            // Apply Dark/Fintech Theme to Chart
+            layout.paper_bgcolor = 'rgba(0,0,0,0)';
+            layout.plot_bgcolor = 'rgba(0,0,0,0)';
+            layout.font = { color: '#94a3b8' };
+            layout.xaxis.gridcolor = '#334155';
+            layout.yaxis.gridcolor = '#334155';
+            layout.xaxis.gridwidth = 0.5;
+            layout.yaxis.gridwidth = 0.5;
+
+            Plotly.newPlot('plotly-chart', graphData.data, layout, { responsive: true, displayModeBar: false });
+        </script>
+        {% endif %}
+
+        <!-- Major Companies Grid -->
+        <section class="reference-section glass-panel">
+            <h3>Market Watchlist</h3>
+            <div class="watchlist-grid">
+                {% for company in [
+                {'name': 'Apple', 'ticker': 'AAPL'},
+                {'name': 'Amazon', 'ticker': 'AMZN'},
+                {'name': 'Tesla', 'ticker': 'TSLA'},
+                {'name': 'NVIDIA', 'ticker': 'NVDA'},
+                {'name': 'Reliance', 'ticker': 'RELIANCE.NS'},
+                {'name': 'TCS', 'ticker': 'TCS.NS'},
+                {'name': 'HDFC Bank', 'ticker': 'HDFCBANK.NS'},
+                {'name': 'Infosys', 'ticker': 'INFY.NS'}
+                ] %}
+                <div class="watchlist-item" onclick="analyzeStock('{{ company.ticker }}')">
+                    <span class="comp-name">{{ company.name }}</span>
+                    <span class="comp-ticker">{{ company.ticker }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+        <footer class="app-footer">
+            <p>StockAI Pro &copy; 2026. Data provided by Yahoo Finance.</p>
+            <p class="disclaimer">Investment simulation only. Not financial advice.</p>
+        </footer>
+
+    </div>
+
+    <script>
+        function resetPortfolio() {
+            if (confirm('Reset portfolio to ₹10,00,000?')) {
+                fetch('/reset', { method: 'POST' })
+                    .then(r => r.json())
+                    .then(d => { if (d.status === 'success') window.location.href = '/'; });
+            }
+        }
+        function analyzeStock(t) {
+            const i = document.querySelector('input[name="ticker"]');
+            if (i) { i.value = t; document.querySelector('.search-form').submit(); }
+        }
+
+        // Calculator Logic
+        function toggleCalculator() {
+            const sec = document.getElementById('calculator-section');
+            const btn = document.getElementById('calc-toggle-btn');
+            if (sec.classList.contains('hidden')) {
+                sec.classList.remove('hidden');
+                btn.innerText = 'Hide Calculator ▲';
+            } else {
+                sec.classList.add('hidden');
+                btn.innerText = '🔮 Predict Future Value';
+            }
+        }
+
+        function calculateForecast() {
+            const amount = document.getElementById('calc-amount').value;
+            const date = document.getElementById('calc-date').value;
+            // Get current ticker from the page context (we can grab it from difference/results or render it into a var)
+            // Using the input field value relative to the page load
+            const ticker = document.querySelector('input[name="ticker"]').value;
+
+            if (!amount || !date || !ticker) {
+                alert("Please fill in all fields.");
+                return;
+            }
+
+            // Show loading or similar could be nice here
+            document.getElementById('calc-results').classList.add('hidden');
+
+            fetch('/calculate_forecast', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `ticker=${encodeURIComponent(ticker)}&amount=${amount}&date=${date}`
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(data.error);
+                        return;
+                    }
+
+                    if (document.getElementById('res-price')) document.getElementById('res-price').innerText = data.predicted_price;
+                    document.getElementById('res-value').innerText = data.future_value;
+
+                    const plEl = document.getElementById('res-pl');
+                    plEl.innerText = data.profit_loss;
+                    plEl.classList.toggle('profit', data.is_profit);
+                    plEl.classList.toggle('loss', !data.is_profit);
+
+                    const pEl = document.getElementById('res-percent');
+                    pEl.innerText = data.percentage + "%";
+                    pEl.classList.toggle('profit', data.is_profit);
+                    pEl.classList.toggle('loss', !data.is_profit);
+
+                    document.getElementById('calc-results').classList.remove('hidden');
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert("Calculation failed.");
+                });
+        }
+    </script>
+    <script>
+        (function(){
+            const stocks = [
+                { name: "Apple", ticker: "AAPL" },
+                { name: "Microsoft", ticker: "MSFT" },
+                { name: "Tesla", ticker: "TSLA" },
+                { name: "NVIDIA", ticker: "NVDA" },
+                { name: "Alphabet", ticker: "GOOGL" },
+                { name: "Amazon", ticker: "AMZN" },
+                { name: "Meta", ticker: "META" },
+                { name: "Netflix", ticker: "NFLX" },
+                { name: "Reliance Industries", ticker: "RELIANCE.NS" },
+                { name: "TCS", ticker: "TCS.NS" },
+                { name: "Infosys", ticker: "INFY.NS" },
+                { name: "HDFC Bank", ticker: "HDFCBANK.NS" },
+                { name: "SBI", ticker: "SBIN.NS" },
+                { name: "ICICI Bank", ticker: "ICICIBANK.NS" },
+                { name: "Tata Motors", ticker: "TATAMOTORS.NS" },
+                { name: "Adani Enterprises", ticker: "ADANIENT.NS" },
+                { name: "Reliance Industries", ticker: "RELIANCE.BO" },
+                { name: "TCS", ticker: "TCS.BO" },
+                { name: "Infosys", ticker: "INFY.BO" }
+            ];
+
+            const input = document.getElementById('ticker-input');
+            const dropdown = document.getElementById('ticker-dropdown');
+            const wrapper = document.querySelector('.search-wrapper');
+
+            function hideDropdown() {
+                dropdown.classList.remove('visible');
+                dropdown.setAttribute('aria-hidden', 'true');
+                setTimeout(() => { dropdown.innerHTML = ''; }, 220);
+            }
+
+            function showSuggestions(list) {
+                if (!list.length) { hideDropdown(); return; }
+                const html = list.map(s => {
+                    return `
+                        <div class="autocomplete-item" data-ticker="${s.ticker}">
+                            <div>
+                                <div class="ticker">${s.ticker}</div>
+                                <div class="meta">${s.name}</div>
+                            </div>
+                        </div>`;
+                }).join('');
+                dropdown.innerHTML = html;
+                dropdown.setAttribute('aria-hidden', 'false');
+                requestAnimationFrame(() => dropdown.classList.add('visible'));
+            }
+
+            input.addEventListener('input', (e) => {
+                const q = (e.target.value || '').trim().toLowerCase();
+                if (!q) { hideDropdown(); return; }
+                const matches = stocks.filter(s => s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)).slice(0, 12);
+                showSuggestions(matches);
+            });
+
+            dropdown.addEventListener('click', (e) => {
+                const item = e.target.closest('.autocomplete-item');
+                if (!item) return;
+                const ticker = item.getAttribute('data-ticker');
+                if (!ticker) return;
+                input.value = ticker;
+                hideDropdown();
+                input.focus();
+            });
+
+            // Hide when clicking outside wrapper (form + dropdown)
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.search-wrapper')) {
+                    hideDropdown();
+                }
+            });
+
+            // Hide on ESC
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') hideDropdown();
+            });
+        })();
+    </script>
+    <script>
+        // Post-load UI adjustments
+        document.addEventListener('DOMContentLoaded', function(){
+            // Set feature bar widths from data-fill attributes
+            document.querySelectorAll('.feature-bar-fill').forEach(el => {
+                const fill = el.getAttribute('data-fill') || '50%';
+                el.style.width = fill;
+            });
+
+            // No sidebar in full-width layout; mobile toggle removed
+
+            // Update chart or UI fade-in where necessary
+            document.querySelectorAll('.card').forEach(c => c.classList.add('fade-in'));
+        });
+    </script>
+</body>
+
+</html>

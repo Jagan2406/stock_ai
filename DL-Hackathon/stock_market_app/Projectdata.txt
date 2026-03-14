@@ -1,0 +1,359 @@
+Project Technical Breakdown - Stock AI Predictor (INR Edition)
+Date: 2026-02-22
+
+**Project Overview**
+
+- What the application does: The app is a Flask-based web dashboard named Stock AI Predictor (INR Edition). It lets users search tickers, see recent price charts, an AI linear-regression-based short-term prediction plotted against the latest data, and a simulation-style portfolio (buy/sell simulated actions). It also provides a trending stocks page and a small investment calculator that projects future value for a chosen target date.
+- Core objective: Provide a lightweight, demo-grade stock prediction and simulation UI that converts prices into INR when needed, gives a single-step AI forecast, and offers an interactive front-end for quick analysis and portfolio simulation.
+- Target users: Developers, hackathon judges, fintech prototypes, traders wanting a quick demo of trend projection, and non-production internal users experimenting with simple forecasting.
+- Problem being solved: Give a quick predictive signal and simulated execution for tickers (global or Indian) using public historical price feeds, to help users rapidly assess short-term directional bias without setting up a full ML infra.
+- Unique features: Automatic USD→INR conversion, an in-page simple simulator that maintains session-based holdings and cash balance, Plotly candlestick + AI overlay, a simple date-based investment calculator using regression in date-ordinal space, and a lightweight trending categorizer.
+- Architecture type: Monolithic single-process Flask web application (frontend + backend in same codebase). UI assets served from `static/`, templates in `templates/`, and application logic in `app.py` (single module that handles routing, ML, data fetch, session management and rendering).
+
+**Full Application Flow**
+
+- When a user opens the site (GET `/`):
+  - Flask route `index()` initializes session state if absent: sets `session['balance']` to `INITIAL_BALANCE`, `session['holdings']` = {}, and `session['history']` = [].
+  - Context dictionary is built with `cash_balance` (formatted INR) and `portfolio_value` calculated from cash + holdings stored in session (holdings' `avg_price` used for estimate).
+  - Template `index.html` is rendered with the context. Page assets (CSS/JS) are loaded from `static/`.
+  - Browser shows ticker bar, centered header, search form, quick access ticker chips, and portfolio summary (from session).
+
+- When a user searches a stock (POST `/` with `ticker` field):
+  - Flask `index()` receives POST. The submitted `ticker` is uppercased and passed to `get_stock_data(ticker)`.
+  - `get_stock_data()` uses `yfinance.Ticker(ticker).history(period="3mo")` to fetch price history (past 3 months). It also tries to read `stock.info['currency']` to detect currency, falling back to heuristics for `.NS` or `.BO` tickers as INR.
+  - If the fetched DataFrame `hist` is empty, an error message is returned to the frontend; otherwise code proceeds.
+  - If fetched currency is `USD`, `get_usd_inr_rate()` is called; it queries `yf.Ticker("INR=X").history(period="1d")` for the latest closing rate and returns it (fallback 84.0 if fetch fails). All `Open/High/Low/Close` columns are multiplied by the exchange rate, and currency label becomes `INR`.
+  - The history DataFrame is reset index and a pseudo-ordinal column `DateOrdinal` is assigned as `df.index`.
+  - Current price is taken as `df['Close'].iloc[-1]`.
+  - The model is trained and predicted via `train_predict_model(df)`:
+    - Uses linear regression from scikit-learn with X = `[['DateOrdinal']]` and y = `Close`.
+    - Model fit, confidence = model.score(X,y) (R^2), predicted price = model.predict(last_index + 1).
+  - `generate_ai_insight(current, predicted, confidence)` returns a human-readable insight (direction, confidence buckets, percent diff).
+  - Recommendation logic: if predicted price > current * 1.005 → BUY; if < current * 0.995 → SELL; else HOLD.
+  - Simulation of trade (session update):
+    - If BUY: invests up to 50% of cash balance, determines integer shares to buy, deducts cost, updates/creates `session['holdings'][ticker]` with `shares` and recalculated `avg_price`, appends action to `session['history']`.
+    - If SELL: if user holds the ticker, sells all shares, adds revenue to balance, removes ticker from holdings, appends to history.
+    - `session.modified = True` after changes so Flask knows to persist session.
+  - Recompute `portfolio_value` = cash + sum(holding.shares * price_to_use). For current ticker price, the live `current_price` is used; other holdings use stored `avg_price`.
+  - Plotly figure is built:
+    - Candlestick trace from `df` (`Open/High/Low/Close`).
+    - A line/marker trace connects last_date and next_date with current_price and predicted_price to visualize AI forecast.
+    - Layout updated and serialized with `plotly.utils.PlotlyJSONEncoder` to `graphJSON`.
+  - The context is updated with formatted strings: `current_price`, `predicted_price`, `difference`, `trend`, `recommendation`, `confidence_score` (percentage string), `ai_insight`, `action_taken`, `graphJSON`, `portfolio_value`, `cash_balance`, `holdings` list (for display), and recent `history`.
+  - `index.html` is re-rendered with these values and the Plotly figure is drawn client-side using the included Plotly script.
+
+- How prediction is generated (end-to-end):
+  - Training: LinearRegression on (index-based) `DateOrdinal` vs `Close`.
+  - Prediction target: next index (last index + 1) predicted close price.
+  - Confidence: R^2 returned by `model.score(X, y)`.
+  - Important detail: initial training uses index-based ordinal, which assumes uniform spacing between rows; the calculator route later retrains with real date ordinals for date-specific projection.
+
+- How portfolio updates:
+  - Session-backed simulation uses `session['balance']`, `session['holdings']` dict entries like `{'shares': int, 'avg_price': float}` and `session['history']`.
+  - Actions triggered automatically in `index()` as a side-effect of the recommendation (BUY/SELL), not by explicit user instruction; this is a simulation convenience.
+  - Holdings valuations are approximated: live price for the searched ticker, stored `avg_price` for other holdings.
+
+- How the trending page works (`/trending` GET):
+  - Predefined `tickers` list is iterated.
+  - For each ticker, `yfinance.Ticker(...).history(period="2d")` is fetched.
+  - `current_close` (last row) and `prev_close` (previous row if present) are read; for USD tickers these are multiplied by `usd_inr` (from `get_usd_inr_rate()`).
+  - Change percent computed = (current - prev)/prev * 100.
+  - Stocks with change_pct >= 0 go to `sell_list` (time to sell); negative changes go to `buy_list`.
+  - Render template `trending.html` with `buy_list` and `sell_list`.
+
+- How the calculator works (`/calculate_forecast` POST):
+  - Accepts `ticker`, `amount` (numeric), `date` (YYYY-MM-DD).
+  - Validates future date.
+  - Fetches `df, currency = get_stock_data(ticker)`; converts to INR if necessary.
+  - Instead of using index ordinals, this route constructs `RealDateOrdinal` = `datetime.toordinal(date)` from `df['Date']`, retrains a new `LinearRegression` on `RealDateOrdinal` vs `Close` and then predicts for `target_date.toordinal()`; this provides a date-aligned projection.
+  - Returns JSON with `predicted_price`, `future_value` (num_shares * predicted_future_price), `profit_loss`, `percentage`, and `is_profit`.
+  - Frontend `calculateForecast()` performs the POST and displays the returned results in the calculator panel.
+
+- Session management / request-response lifecycle:
+  - Sessions are Flask cookie-based signed sessions using `app.secret_key = 'super_secret_key_for_session'`.
+  - On each request, Flask loads session data; on changes, `session.modified = True` ensures session is serialized back to the client cookie.
+  - No server-side DB or persistent store—session data are stored client-side (signed cookie) by Flask by default.
+  - Request-response lifecycle example (search flow):
+    1. Browser POSTs ticker to `/`.
+    2. Flask receives request in `index()`, reads session, fetches data from yfinance (external network), possibly fetches exchange rate, runs local ML training (scikit-learn LinearRegression), updates session (simulated trades), builds Plotly figure JSON, renders `index.html` and returns HTML response.
+    3. Browser receives server-rendered HTML, which contains Plotly JSON; client-side Plotly script renders the interactive chart.
+
+**Frontend Details**
+
+- Languages used: HTML (Jinja2 templates), CSS, JavaScript (vanilla), and a small dependency on Plotly client script.
+- Frameworks/libraries used on frontend: Plotly (plotly.js via CDN) for charts; no SPA framework—templates are server-rendered by Flask.
+- UI structure / HTML layout hierarchy (major blocks in `templates/index.html`):
+  - `html > body`
+    - `div.ticker-wrap` — fixed top marquee ticker.
+    - `div.container` — centered page container.
+      - `main.main`
+        - `header.app-header.topbar` — centered brand title ("StockAI PRO").
+        - `section.search-section`
+          - `div.search-wrapper`
+            - `form.search-form` — search input and ANALYZE button.
+            - `div#ticker-dropdown.autocomplete-dropdown` — in-flow autocomplete results.
+          - `div.search-suggestions` — quick access ticker chips, trending link.
+        - Conditional AI dashboard block (rendered if `graphJSON` present)
+          - `div.dashboard-grid` — grid layout:
+            - `.metrics-col` — metric cards (current price, predicted price, signal)
+            - `.insight-col` — analysis card, plot card, calculator section (hidden by default)
+        - `section.portfolio-section` — holdings table and portfolio summary.
+        - `section.reference-section` — watchlist grid.
+        - `footer.app-footer`
+- CSS system / design approach: Custom CSS in `static/style.css`:
+  - Uses CSS variables for colors and spacing (`:root` tokens). Glass-panel and card components share styles.
+  - Layout uses centered container with `max-width` and responsive media queries. Initially had a sidebar layout; patched to full-width centered main container with `max-width:1200px; margin:0 auto; padding: 0 40px`.
+  - Utility classes: `.glass-panel`, `.card`, `.metric-card`, `.dashboard-grid` responsive grid adjustments at `min-width:900px`, etc.
+  - Visual design relies on dark-background, translucent glass panels, accent colors, and drop-shadows. Plotly theme adjusted server-side to harmonize.
+- JavaScript functions and purpose (in `index.html` scripts):
+  - Autocomplete: builds `stocks` list and handles `input` events on `#ticker-input`, shows/hides `#ticker-dropdown` and populates items; clicking an item sets input and submits.
+  - `analyzeStock(t)`: helper to set ticker input value and submit the search form (used by quick-access chips).
+  - Calculator toggling: `toggleCalculator()` shows/hides calculator panel.
+  - Calculator execution: `calculateForecast()` reads inputs, posts to `/calculate_forecast` via `fetch` (application/x-www-form-urlencoded), parses JSON result and updates result DOM.
+  - Post-load UI adjustments: setting `.feature-bar-fill` widths, mobile toggle binding (removed when sidebar removed), fading in cards.
+  - Plotly rendering: inline script extracts `graphJSON` rendered by Flask and calls `Plotly.newPlot(...)` with plot data and layout tweaks.
+- All components:
+  - Search bar / autocomplete.
+  - Header / brand.
+  - Ticker marquee (top fixed bar).
+  - Quick-access ticker chips + trending CTA.
+  - Metrics cards (current price, target, signal).
+  - Analysis card (AI insight).
+  - Chart (candlestick + AI line overlay via Plotly).
+  - Investment calculator (AJAX).
+  - Portfolio table and summary.
+  - Watchlist grid.
+  - Footer.
+- How AJAX is used:
+  - Only the calculator uses AJAX: POST to `/calculate_forecast` and consumes JSON result to display projected future value.
+  - Transactional actions (BUY/SELL) are NOT via AJAX — they happen server-side automatically during the POST search request and the returned HTML contains updated session state.
+- How chart rendering works:
+  - Server constructs a Plotly figure object (`go.Figure()` with Candlestick and Scatter traces), sets layout, serializes to JSON via `json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)` and injects into template context as `graphJSON`.
+  - Client-side script receives `graphJSON` variable and calls `Plotly.newPlot('plotly-chart', graphData.data, layout, { responsive: true, displayModeBar: false })`.
+  - The server also modifies figure layout to fit the dark theme (some layout properties are set before serialization).
+- Responsive behavior:
+  - CSS media queries collapse the (now-removed) sidebar and adjust grid; the `.dashboard-grid` switches from single-column to two-column at min-width 900px. Container padding reduces for small screens (`.main` padding 16px under 640px).
+  - Autocomplete and other components have smaller max-heights for small screens to remain usable.
+
+**Backend Details**
+
+- Language: Python 3 (project uses Flask 3)
+- Framework: Flask (server-rendered templating via Jinja2)
+- File structure (top-level in `stock_market_app/`):
+  - `app.py` — main application file containing routes, ML logic, and helpers.
+  - `debug_yfinance.py` — helper script for testing `yfinance` fetches.
+  - `requirements.txt` — pinned dependencies.
+  - `templates/` — Jinja2 templates: `index.html`, `trending.html`.
+  - `static/` — assets: `style.css`, `bg.png`.
+  - `render.yaml` — deployment config for Render (present in repository).
+- Route list (from `app.py`):
+  - `GET, POST /` → `index()` — main dashboard and search handler. (Renders `index.html`.)
+  - `POST /reset` → `reset_portfolio()` — resets `session` balance, holdings, history; returns JSON `{'status':'success'}`.
+  - `POST /calculate_forecast` → `calculate_forecast()` — AJAX endpoint returning JSON with predicted future price/value for a target date.
+  - `GET /trending` → `trending()` — builds `buy_list` and `sell_list` from a hard-coded tickers set and renders `trending.html`.
+- What each route does (concise):
+  - `/`: initialize session if needed, accept ticker POST, fetch data, currency conversion, train model, predict, simulate buy/sell, prepare Plotly graph, and render template with all UI data.
+  - `/reset`: clear session holdings and balance.
+  - `/calculate_forecast`: date-specific projection using real date ordinals and returns JSON for front-end display.
+  - `/trending`: fetch two days of data for hard-coded tickers, compute short-term percent change, categorize into buy/sell lists, render template.
+- How sessions are handled:
+  - Flask’s default signed cookie session is used (`app.secret_key` is set in `app.py`).
+  - Session keys: `balance` (float), `holdings` (dict keyed by ticker), `history` (list).
+  - Updates use `session.modified = True` to ensure persistence.
+  - Because Flask sessions are cookie-based, all session data are serialized and stored client-side (subject to cookie size limits).
+- How stock data is fetched:
+  - Data comes from `yfinance` (yahoo finance API wrapper).
+  - Main functions use `Ticker.history(period="3mo")` or `"2d"`, and `Ticker.info` for metadata where available.
+  - For exchange rate, the app fetches `yf.Ticker("INR=X").history(period="1d")` and uses `Close` value as USD→INR rate.
+- How currency conversion works:
+  - If the ticker's currency is detected as `USD` (either via `stock.info['currency']` or heuristic based on ticker suffix), the OHLC columns are multiplied by `get_usd_inr_rate()` to produce INR-equivalent prices for plotting and simulation.
+- How portfolio simulation works:
+  - Simulation actions are based on automatic recommendations:
+    - BUY: allocate up to 50% of `session['balance']`, buy as many whole shares as possible. Update holdings `shares` and average price. Deduct cost from balance.
+    - SELL: if holdings exist for ticker, sells all shares at current price, removes holding entry, add revenue to balance.
+  - History appended with action, date/time, ticker, price, and share count.
+  - No order book, trade delay, or commission are modeled. No partial shares.
+- How prediction logic works internally:
+  - Primary logic in `train_predict_model(df)`:
+    - X = `DateOrdinal` (index-based sequence 0..N).
+    - y = `Close`.
+    - Fit `LinearRegression()` model and compute `confidence` as `model.score(X, y)` (R^2).
+    - Predict next value at index = last_index + 1.
+  - For the calculator, a separate model `model_new` is trained on `RealDateOrdinal` (datetime.toordinal) and used to predict for an explicit future date.
+  - Confidence is R^2 of linear fit—interpreted into human labels ("Low", "Medium", "High").
+
+**Machine Learning Logic**
+
+- Model used: scikit-learn `LinearRegression` (ordinary least squares).
+- Why chosen: Simplicity, minimal compute, deterministic behavior and fast training for small datasets (3 months of daily bars). Appropriate for a hackathon/demo where interpretability and speed are prioritized over sophisticated modeling.
+- Input features:
+  - Two variants in code:
+    1. Index-based ordinal: `DateOrdinal = df.index` (0..N) used in `train_predict_model` for the default flow.
+    2. Real date ordinal: `RealDateOrdinal = pd.to_datetime(df['Date']).map(datetime.toordinal)` used in `/calculate_forecast` for date-specific projection.
+  - No other features are used (no volume, moving averages, indicators, sentiment, or lag features).
+- Output target: Predict the next-day closing price (or price at a target date for the calculator).
+- Training process: For each request, the model is retrained on the supplied 3-month historical data using the chosen ordinal approach. Single linear regression fit (no cross-validation, no hold-out).
+- Preprocessing steps:
+  - Currency conversion to INR when needed.
+  - Reset index and create ordinal/time features (index or date ordinal).
+  - No smoothing, outlier clipping, scaling, or feature engineering.
+- How confidence score is calculated:
+  - R² (coefficient of determination) from `model.score(X, y)` is used as confidence. It measures goodness-of-fit on training data, not a predictive confidence interval.
+- How future date projection works:
+  - Calculator re-trains on `RealDateOrdinal` and uses `model_new.predict([[target_date.toordinal()]])`. This projects price linearly along the date axis.
+- Limitations of current model:
+  - Linear model is too simplistic for financial time series—assumes linear trend and ignores seasonality, volatility, jump events, heteroscedasticity.
+  - Using R² as "confidence" is misleading: it measures fit, not predictive certainty, and will be optimistic on training data.
+  - Training on the last ~3 months only and predicting next day or arbitrary future dates is fragile—results may be very inaccurate.
+  - No validation set, no out-of-sample testing, no volatility modeling, no error estimates (prediction intervals).
+  - Using index-based ordinals assumes uniform sampling and can bias prediction if the DataFrame has missing days.
+  - No handling for corporate actions, splits, or dividends.
+  - Predictions may be highly sensitive to outliers and influenced by short-term trends that are not predictive.
+
+**APIs & External Services**
+
+- APIs used:
+  - Yahoo Finance via `yfinance` (no explicit API key required).
+- API keys required: None in current setup — `yfinance` uses public Yahoo endpoints.
+- Rate limits: Yahoo Finance does not publish a formal public rate limit; frequent automated requests risk throttling or being blocked. `yfinance` is not guaranteed for high-volume production workloads.
+- How API calls are structured:
+  - `yf.Ticker(symbol).history(period="...")` for OHLC data.
+  - `yf.Ticker(symbol).info` used heuristically to read currency metadata.
+- Data reliability considerations:
+  - Yahoo data can be inconsistent or delayed; some tickers may have incomplete history.
+  - Frequent fetching for many tickers (e.g., trending list, multiple users) can cause latency and potential blocking.
+  - No caching layer; each request triggers fresh `yfinance` calls which increases latency and load.
+
+**File Structure (clean tree)**
+
+- stock_market_app/
+  - app.py
+  - debug_yfinance.py
+  - render.yaml
+  - requirements.txt
+  - templates/
+    - index.html
+    - trending.html
+  - static/
+    - style.css
+    - bg.png
+
+**Data & Storage**
+
+- Where data is stored:
+  - No database. Session data stored in Flask signed cookies (client-side) with `app.secret_key`.
+  - Historical price data is fetched on-demand from `yfinance` (in-memory pandas DataFrames during request).
+- Session structure:
+  - `session['balance']`: float (cash balance in INR)
+  - `session['holdings']`: dict { ticker: { 'shares': int, 'avg_price': float } }
+  - `session['history']`: list of trade events (timestamp, ticker, action, price, shares)
+- How portfolio is stored:
+  - Entirely in `session` cookie (serialized), not in server DB. Holdings average price stored in INR.
+- Limitations of current storage method:
+  - Cookie size limit (~4KB-8KB depending on browser) restricts how much session data can be stored.
+  - Session data is client-side and can be tampered with if secret key compromised; while signatures prevent tampering, sensitive info in cookie is suboptimal.
+  - Not suitable for multi-user concurrency, long-term persistence, or large histories.
+- Production risks:
+  - Cookie-based session storage doesn't scale and can exceed cookie limits. Loss of server secret key or exposure will circumvent session integrity.
+  - No backups, no audit trail, and no transactional guarantees for simulated trades.
+
+**Deployment Setup**
+
+- How it runs locally:
+  - Use Flask's debug server:
+    - `python -m flask --app app --debug run --host 0.0.0.0 --port 5000`
+  - Or run `python app.py` (in `if __name__ == '__main__'` it uses `os.environ.get('PORT', 10000)`).
+- How it runs on Render:
+  - `render.yaml` likely configures a web service with `gunicorn` as entry point. `requirements.txt` includes `gunicorn`. Render will run `gunicorn app:app` or similar.
+- What gunicorn does:
+  - A WSGI HTTP server for Python production deployments to serve the Flask app with multiple worker processes, enabling concurrency and better performance than Flask's built-in server.
+- Environment variables:
+  - `PORT` is read by `app.py` for direct run. Render/host may supply `PORT` and `WEB_CONCURRENCY` etc.
+  - `app.secret_key` is hard-coded in `app.py` — in production it should come from an environment variable like `SECRET_KEY`.
+- Production differences vs development:
+  - Production should use `gunicorn` (or similar), set `FLASK_ENV=production`, serve static assets effectively, protect `SECRET_KEY`, and add caching and logging.
+  - Should enable HTTPS and set secure cookie flags.
+  - Should not rely on `yfinance` for high-volume usage without caching and request rate controls.
+
+**Security & Risks**
+
+- Input validation issues:
+  - `ticker` is uppercased and used directly in `yfinance.Ticker(ticker)` with no sanitization. While `yfinance` expects ticker strings, malformed input could cause unexpected errors.
+  - Numeric conversions: the calculator casts `amount = float(request.form.get('amount'))` without safe checks; malformed input could raise exceptions (though caught at top-level).
+- API abuse risks:
+  - Unthrottled calls to `yfinance` per request risk getting blocked by Yahoo or causing service outages. No caching or rate-limiting is implemented.
+- Session vulnerabilities:
+  - `app.secret_key` is hard-coded and insecure. If compromised, session signatures can be forged.
+  - Cookie-based sessions store all portfolio data client-side; sensitive info is exposed to client (though signed), and cookie size/exposure issues exist.
+  - No CSRF tokens for POST forms (Flask built-in forms not using Flask-WTF), so CSRF risk exists if cookies authenticate actions. For this app, actions are implicitly triggered on POST; a CSRF exploit could trigger simulated trades or reset portfolio if a victim hits a crafted page.
+- ML prediction reliability risks:
+  - Overfitting to recent data, misuse of R² as confidence, linear extrapolation risks—predictions are not robust and should never be used for real trading decisions.
+  - No logging or alerts for model failures; the app returns error strings but no analytics for model performance.
+- Scalability limits:
+  - `yfinance` calls per request, synchronous ML training on request thread, and server-side rendering will become slow with multiple concurrent users.
+  - Single-process Gunicorn with limited workers will limit concurrent requests unless configured properly.
+  - Cookie-based session limits multi-server scaling (unless using a shared session store like Redis).
+
+**Performance Analysis**
+
+- Where performance bottlenecks may exist:
+  - Network fetch latency to `yfinance` (history requests).
+  - Synchronous scikit-learn training per request (even though linear regression is cheap, repeated retraining for multiple concurrent users adds CPU overhead).
+  - Plotly serialization (creating `graphJSON`) and large HTML payloads.
+  - Client-side rendering of Plotly charts may be heavy on low-end devices.
+- API latency risks:
+  - `yfinance` depends on external endpoints; outages or slowdowns will block requests and increase user-perceived latency.
+- ML retraining cost:
+  - Linear regression is small cost; but if upgraded to more complex models (XGBoost, LSTM), retraining at request time becomes infeasible and should be moved offline or to an inference endpoint.
+- Frontend rendering cost:
+  - Plotly charts can be heavy: many data points or repeated charts slow down browser rendering. Charting large datasets should be downsampled.
+- Optimization suggestions:
+  - Add server-side caching (Redis or in-memory TTL cache) for `yfinance` responses per symbol to reduce repeated network calls.
+  - Precompute or cache USD→INR rate periodically rather than fetching each request.
+  - Move ML training offline and serve inference from a lightweight endpoint or precomputed predictions, or at least reuse models for a user session.
+  - Use asynchronous requests / worker queue for long-running tasks and return progress to user.
+  - Use a CDN and proper caching headers for static assets, compress responses.
+  - Limit the amount of data serialized into session cookies; migrate to server-side sessions (Redis) for scaling.
+
+**Professional Improvement Roadmap**
+
+- UI improvements:
+  - Replace implicit automatic trade execution with explicit user actions (confirm buy/sell).
+  - Add a compact SaaS header (top navigation, account/profile menu, CTA), move secondary nav items into a responsive top nav.
+  - Improve visual hierarchy: typography scales, better spacing, responsive card stacking, smaller chart on mobile.
+  - Provide a settings modal for currency, default stake %, and risk parameters.
+  - Add toast notifications and error modals for UX clarity.
+- Backend architecture improvements:
+  - Move from monolithic `app.py` to modular structure:
+    - `app/__init__.py` (Flask factory), `app/routes/*.py`, `app/services/yfinance_service.py`, `app/ml/predictor.py`, `app/models.py`, `app/utils.py`.
+  - Introduce server-side session store (Redis) and a DB for users and persistent portfolios (Postgres).
+  - Add rate-limiting middleware and request caching (Redis).
+  - Add structured logging, monitoring (Prometheus, Sentry), and health checks.
+- ML upgrades:
+  - Replace single linear regression with a robust pipeline:
+    - Feature engineering: lags, moving averages, volatility, RSI, macro indicators.
+    - Model: ensemble methods (XGBoost) or probabilistic models (Bayesian linear regression) for intervals; or time-series models (ARIMA/Prophet) with cross-validation.
+    - Offline training, periodic retraining and model registry (MLflow).
+    - Provide prediction intervals, not just point estimates.
+- Database migration plan:
+  - Introduce Postgres for user and portfolio persistence: tables for users, holdings, transactions, historical predictions.
+  - Migrate session to Redis and store session id in cookie only.
+  - Design transactional flows for trades and reconciliation jobs to recompute portfolio valuations from live prices.
+- Real-time streaming improvements:
+  - Add a price streaming layer using WebSockets (e.g., Socket.IO or SSE) for live price updates to the front-end.
+  - Use a lightweight job that subscribes to data provider streaming or polls at short intervals, publishing updates to channels.
+- Scalability plan:
+  - Containerize app with Docker, deploy to a managed platform (Render, AWS ECS, or Kubernetes).
+  - Use autoscaling Gunicorn worker counts and horizontal pods behind a load balancer.
+  - Use Redis for caching and sessions, Postgres for persistence, and S3/Cloudflare CDN for static assets.
+- SaaS monetization potential:
+  - Offer freemium plan: limited free queries per day, premium plan includes faster limits, advanced models, scheduled reports, and portfolio analytics.
+  - Tiered API access for programmatic prediction endpoints.
+  - Analytics dashboard for paid users, team accounts, and alerts.
+- Requirements to implement roadmap:
+  - Add CI/CD, unit tests, and integration tests.
+  - Add user authentication and authorization.
+  - Secure environment variable management (secrets), HTTPS, and data retention policies.
+  - Cost model for data provider API usage if switching to paid data sources.
+
+End of Report

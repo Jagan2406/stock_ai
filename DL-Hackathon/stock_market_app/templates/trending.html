@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trending Stocks | StockAI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@300;400;600;800&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="ticker-wrap">
+        <div class="ticker">
+            <div class="ticker-item">NIFTY 50 <span class="up">▲ 24,142</span></div>
+            <div class="ticker-item">SENSEX <span class="up">▲ 79,486</span></div>
+            <div class="ticker-item">S&P 500 <span class="down">▼ 5,346</span></div>
+            <div class="ticker-item">NASDAQ <span class="up">▲ 16,745</span></div>
+            <div class="ticker-item">USD/INR <span class="neutral">84.05</span></div>
+            <div class="ticker-item">GOLD <span class="up">▲ 72,500</span></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <header class="app-header">
+            <div class="logo">
+                <h1>StockAI PRO</h1>
+            </div>
+            <p class="subtitle">Market Trends & Opportunities</p>
+        </header>
+
+        <div style="margin-bottom: 2rem;">
+            <a href="/" class="btn-text">← Back to Dashboard</a>
+        </div>
+
+        <div class="dashboard-grid"
+            style="grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); align-items: stretch;">
+            <!-- Time to Sell (Price Risen) -->
+            <div class="card glass-panel" style="padding: 0; display: flex; flex-direction: column; height: 100%;">
+                <div style="padding: 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <h3 style="color: var(--accent-danger);">🔥 Stock Price Risen – Time to Sell</h3>
+                </div>
+                <div class="table-container"
+                    style="border: none; border-radius: 0 0 16px 16px; flex: 1; min-height: 400px;">
+                    <table class="fintech-table">
+                        <thead>
+                            <tr>
+                                <th>Company</th>
+                                <th>Price</th>
+                                <th>Change</th>
+                                <th>Signal</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if sell_list %}
+                            {% for stock in sell_list %}
+                            <tr>
+                                <td>
+                                    <div style="font-weight: 600; color: white;">{{ stock.name }}</div>
+                                    <div style="font-size: 0.8rem; font-family: var(--font-mono);">{{ stock.ticker }}
+                                    </div>
+                                </td>
+                                <td class="font-mono">{{ stock.price }}</td>
+                                <td style="color: var(--accent-success);">+{{ stock.change }}%</td>
+                                <td><span class="status-badge"
+                                        style="background: rgba(255, 77, 109, 0.2); color: var(--accent-danger);">SELL</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% else %}
+                            <tr>
+                                <td colspan="4" style="text-align: center;">No significant risers today.</td>
+                            </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Time to Buy (Price Dropped) -->
+            <div class="card glass-panel" style="padding: 0; display: flex; flex-direction: column; height: 100%;">
+                <div style="padding: 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <h3 style="color: var(--accent-success);">💎 Stock Price Dropped – Time to Buy</h3>
+                </div>
+                <div class="table-container"
+                    style="border: none; border-radius: 0 0 16px 16px; flex: 1; min-height: 400px;">
+                    <table class="fintech-table">
+                        <thead>
+                            <tr>
+                                <th>Company</th>
+                                <th>Price</th>
+                                <th>Change</th>
+                                <th>Signal</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if buy_list %}
+                            {% for stock in buy_list %}
+                            <tr>
+                                <td>
+                                    <div style="font-weight: 600; color: white;">{{ stock.name }}</div>
+                                    <div style="font-size: 0.8rem; font-family: var(--font-mono);">{{ stock.ticker }}
+                                    </div>
+                                </td>
+                                <td class="font-mono">{{ stock.price }}</td>
+                                <td style="color: var(--accent-danger);">{{ stock.change }}%</td>
+                                <td><span class="status-badge"
+                                        style="background: rgba(38, 230, 164, 0.2); color: var(--accent-success);">BUY</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% else %}
+                            <tr>
+                                <td colspan="4" style="text-align: center;">No significant dippers today.</td>
+                            </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <footer class="app-footer">
+            <p>StockAI Pro &copy; 2026. Real-time Analysis.</p>
+        </footer>
+    </div>
+</body>
+
+</html>
